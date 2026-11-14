@@ -9,8 +9,14 @@ from sqlalchemy.orm import sessionmaker
 
 from solution.app.database import Base
 from solution.app.config import load_config
-from solution.app.models import Lead, Call, ActiveCallLock
+from solution.app.models import (
+    Campaign,
+    Lead,
+    Call,
+    ActiveCallLock,
+)
 from solution.app import dispatcher
+from solution.app.security import hash_phone
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -73,6 +79,21 @@ def dispatcher_setup(monkeypatch):
 
     config = load_config(CONFIG_PATH)
 
+    campaign_config = config.campaigns["c_acme_renewals"]
+
+    # Create the campaign required by webhook validation.
+    campaign = Campaign(
+        id="c_acme_renewals",
+        tenant_id="acme_insurance",
+        start_time=campaign_config.window_start,
+        end_time=campaign_config.window_end,
+        active_days=",".join(campaign_config.days),
+        max_attempts=campaign_config.max_attempts,
+        enabled=True,
+    )
+
+    session.add(campaign)
+
     lead = Lead(
         campaign_id="c_acme_renewals",
         lead_id="dispatcher_test_lead",
@@ -96,6 +117,7 @@ def dispatcher_setup(monkeypatch):
 
     session.close()
     engine.dispose()
+
 
 
 def test_successful_submission_counts_one_attempt(dispatcher_setup):
@@ -336,3 +358,89 @@ def test_restart_reuses_original_request_id_after_provider_404(
 
     lock = session.query(ActiveCallLock).one()
     assert lock.request_id == call.request_id
+
+
+def test_restart_recovers_completed_call_when_webhook_was_lost(
+    dispatcher_setup,
+):
+    session, config, lead = dispatcher_setup
+
+    call = create_uncertain_call(session, config, lead)
+
+    # Simulate a call already accepted by the provider.
+    call.status = "active"
+    call.provider_call_sid = "CA_lost_webhook_001"
+
+    lead.attempts = 1
+    lead.status = "calling"
+
+    # Ensure the webhook phone matches the stored lead hash.
+    phone = "+919876543210"
+    lead.phone_hash = hash_phone(phone)
+
+    session.commit()
+
+    ended_at = "2026-11-12T12:30:00+05:30"
+
+    completed_payload = {
+        "event": "call.completed",
+        "call_sid": "CA_lost_webhook_001",
+        "request_id": call.request_id,
+        "tenant_id": "acme_insurance",
+        "campaign_id": "c_acme_renewals",
+        "lead_id": "dispatcher_test_lead",
+        "phone": phone,
+        "status": "completed",
+        "disposition": "interested",
+        "callback_at": None,
+        "started_at": "2026-11-12T12:28:00+05:30",
+        "ended_at": ended_at,
+        "duration_sec": 120,
+    }
+
+    # Provider has completed the call, but its webhook was lost.
+    # Reconciliation retrieves the completed result directly.
+    provider = FakeProvider(
+        post_responses=[],
+        get_responses=[
+            FakeResponse(
+                200,
+                {
+                    "call_sid": "CA_lost_webhook_001",
+                    "request_id": call.request_id,
+                    "state": "completed",
+                    "result": completed_payload,
+                },
+            )
+        ],
+    )
+
+    results = dispatcher.reconcile_pending_calls(
+        session,
+        provider,
+        config,
+    )
+
+    session.refresh(lead)
+    session.refresh(call)
+
+    assert len(results) == 1
+    assert results[0]["reconciled"] is True
+
+    # The completed provider result updates the local database.
+    assert lead.status == "completed"
+    assert lead.last_disposition == "interested"
+    assert lead.attempts == 1
+
+    assert call.status == "completed"
+    assert call.provider_call_sid == "CA_lost_webhook_001"
+
+    # The completion webhook processing releases the active lock.
+    assert session.query(ActiveCallLock).count() == 0
+
+    # Recovery must not create another provider call.
+    assert len(provider.post_payloads) == 0
+
+    # The original request ID is used for reconciliation.
+    assert provider.get_requests[0][1]["request_id"] == call.request_id
+

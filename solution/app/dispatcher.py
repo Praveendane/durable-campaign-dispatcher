@@ -33,7 +33,12 @@ CALLBACK_URL = os.getenv(
     "http://127.0.0.1:8000/webhooks/provider",
 )
 
-UNCERTAIN_STATUSES = ("submitting", "uncertain")
+# Include active calls because their completion webhooks may be lost.
+RECOVERABLE_STATUSES = (
+    "submitting",
+    "uncertain",
+    "active",
+)
 
 WEBHOOK_STATUSES = {
     "no_answer",
@@ -193,7 +198,7 @@ def reconcile_call(
     call: Call,
 ) -> dict:
     """
-    Reconcile one previously persisted submitting/uncertain request.
+    Reconcile one previously persisted request.
 
     Never create a new request ID during reconciliation.
     """
@@ -357,11 +362,15 @@ def reconcile_pending_calls(
     client: httpx.Client,
     config,
 ) -> list[dict]:
-    """Recover persisted requests left unfinished by a restart."""
+    """
+    Recover requests left unfinished by a restart or lost webhook.
+
+    Includes submitting, uncertain, and active calls.
+    """
 
     pending_calls = (
         session.query(Call)
-        .filter(Call.status.in_(UNCERTAIN_STATUSES))
+        .filter(Call.status.in_(RECOVERABLE_STATUSES))
         .order_by(Call.created_at.asc())
         .all()
     )
