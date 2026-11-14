@@ -573,13 +573,17 @@ def submit_call(
         raise
 
 
+
 def dispatch_once(
     session: Session,
     config,
     limit: int = 100,
 ) -> list[dict]:
     """
-    Reconcile old requests first, then dispatch eligible new leads.
+    Reconcile old requests first, then dispatch eligible leads.
+
+    Refresh provider simulated time before every submission so a
+    batch cannot continue dialing after a campaign window closes.
     """
 
     results = []
@@ -598,16 +602,25 @@ def dispatch_once(
 
         results.extend(recovery_results)
 
-        sim_now = get_provider_clock(client)
+        # Re-evaluate eligibility using a fresh provider clock
+        # before every individual call.
+        for _ in range(limit):
+            sim_now = get_provider_clock(client)
 
-        eligible_leads = get_eligible_leads(
-            session,
-            config,
-            sim_now,
-            limit=limit,
-        )
+            eligible_leads = get_eligible_leads(
+                session,
+                config,
+                sim_now,
+                limit=1,
+            )
 
-        for lead in eligible_leads:
+            if not eligible_leads:
+                break
+
+            lead = eligible_leads[0]
+
+            # Submit only the lead found eligible at this
+            # latest simulated time.
             result = submit_call(
                 session,
                 client,

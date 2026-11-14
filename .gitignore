@@ -9,3 +9,6 @@ data_large/
 reports/
 final_state.csv
 .pytest_cache/
+
+# Database files and backups
+*.db*

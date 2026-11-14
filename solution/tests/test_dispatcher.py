@@ -1,6 +1,7 @@
 
 from pathlib import Path
 
+from datetime import datetime
 import httpx
 import pytest
 
@@ -444,3 +445,76 @@ def test_restart_recovers_completed_call_when_webhook_was_lost(
     # The original request ID is used for reconciliation.
     assert provider.get_requests[0][1]["request_id"] == call.request_id
 
+
+def test_dispatch_once_refreshes_clock_after_campaign_window_closes(
+    dispatcher_setup,
+    monkeypatch,
+):
+    session, config, lead = dispatcher_setup
+
+    # The first check is just before the campaign closes.
+    # The second check is after the campaign closes.
+    clock_values = iter([
+        datetime.fromisoformat("2026-11-12T18:59:50+05:30"),
+        datetime.fromisoformat("2026-11-12T19:00:10+05:30"),
+    ])
+
+    clock_checks = []
+
+    def fake_clock(client):
+        current_time = next(clock_values)
+        clock_checks.append(current_time)
+        return current_time
+
+    submitted_leads = []
+
+    def fake_submit(session, client, config, selected_lead):
+        submitted_leads.append(selected_lead.lead_id)
+        return {"status": "active"}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        dispatcher.httpx,
+        "Client",
+        lambda **kwargs: FakeClient(),
+    )
+
+    monkeypatch.setattr(
+        dispatcher,
+        "reconcile_pending_calls",
+        lambda session, client, config: [],
+    )
+
+    monkeypatch.setattr(
+        dispatcher,
+        "get_provider_clock",
+        fake_clock,
+    )
+
+    monkeypatch.setattr(
+        dispatcher,
+        "submit_call",
+        fake_submit,
+    )
+
+    results = dispatcher.dispatch_once(
+        session,
+        config,
+        limit=100,
+    )
+
+    assert len(clock_checks) == 2
+
+    assert clock_checks[0].hour == 18
+    assert clock_checks[1].hour == 19
+
+    # The lead is submitted once before the window closes.
+    assert submitted_leads == ["dispatcher_test_lead"]
+
+    assert len(results) == 1
