@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKeyConstraint,
     Index,
+    UniqueConstraint,
 )
 
 from solution.app.database import Base
@@ -107,3 +108,29 @@ class PhoneSuppression(Base):
     reason = Column(String, nullable=False)
     source_campaign_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+class ActiveCallLock(Base):
+    __tablename__ = "active_call_locks"
+
+    phone_hash = Column(String, primary_key=True)
+    request_id = Column(String, nullable=False, unique=True)
+
+    tenant_id = Column(String, nullable=False)
+    campaign_id = Column(String, nullable=False)
+    lead_id = Column(String, nullable=False)
+
+    slot_number = Column(Integer, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "slot_number",
+            name="uq_tenant_active_slot",
+        ),
+    )

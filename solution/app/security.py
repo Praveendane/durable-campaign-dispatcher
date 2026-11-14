@@ -66,3 +66,24 @@ def hash_phone(phone: str) -> str:
         normalized.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+
+import hashlib
+import hmac
+
+
+def verify_webhook_signature(
+    raw_body: bytes,
+    signature: str | None,
+    webhook_secret: str,) -> bool:
+    
+    # """Verify the provider's HMAC-SHA256 signature."""
+    if not signature or not webhook_secret:
+        return False
+
+    expected = hmac.new(
+        webhook_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature)
