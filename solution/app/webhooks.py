@@ -12,6 +12,7 @@ from solution.app.models import (
     WebhookEvent,
 )
 from solution.app.security import hash_phone
+from solution.app.scheduler import next_campaign_open
 
 
 TERMINAL_DISPOSITIONS = {
@@ -195,8 +196,20 @@ def process_call_completed(
 
         elif disposition == "callback_requested":
             lead.status = "callback_wait"
+
+            # Preserve the customer's original requested callback time.
             lead.callback_at = callback_at
-            lead.next_eligible_at = callback_at
+
+            # Move the callback to the next valid campaign window
+            # when the requested time falls outside permitted hours/days.
+            campaign_config = config.campaigns[campaign_id]
+
+            lead.next_eligible_at = next_campaign_open(
+                callback_at,
+                campaign_config,
+                config.regulatory_start,
+                config.regulatory_end,
+            )
 
         elif status in {"no_answer", "busy", "failed"}:
             retry_minutes = getattr(

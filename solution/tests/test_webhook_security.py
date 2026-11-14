@@ -183,3 +183,87 @@ def test_wrong_phone_is_rejected(setup):
 
     lead = session.get(Lead, ("c_acme_renewals", "lead_001"))
     assert lead.status == "calling"
+
+
+def test_callback_after_campaign_closing_moves_to_next_opening(setup):
+    session, config, phone = setup
+
+    payload = make_payload(
+        phone,
+        status="completed",
+        disposition="callback_requested",
+    )
+
+    payload["callback_at"] = "2026-11-12T20:00:00+05:30"
+    payload["ended_at"] = "2026-11-12T18:00:00+05:30"
+
+    assert process_call_completed(session, payload, config) is True
+
+    lead = session.get(Lead, ("c_acme_renewals", "lead_001"))
+
+    assert lead.status == "callback_wait"
+    assert lead.callback_at is not None
+    assert lead.next_eligible_at is not None
+
+    # The campaign opens at 10:00 AM the next permitted day.
+    scheduled = lead.next_eligible_at
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=config.timezone)
+
+    assert scheduled.hour == 10
+    assert scheduled.minute == 0
+    assert scheduled.day == 13
+
+
+def test_callback_before_campaign_opening_moves_to_opening(setup):
+    session, config, phone = setup
+
+    payload = make_payload(
+        phone,
+        status="completed",
+        disposition="callback_requested",
+    )
+
+    payload["callback_at"] = "2026-11-12T08:00:00+05:30"
+    payload["ended_at"] = "2026-11-12T07:00:00+05:30"
+
+    assert process_call_completed(session, payload, config) is True
+
+    lead = session.get(Lead, ("c_acme_renewals", "lead_001"))
+
+    scheduled = lead.next_eligible_at
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=config.timezone)
+
+    assert lead.status == "callback_wait"
+    assert scheduled.hour == 10
+    assert scheduled.minute == 0
+    assert scheduled.day == 12
+
+
+def test_callback_on_non_working_day_moves_to_next_allowed_day(setup):
+    session, config, phone = setup
+
+    payload = make_payload(
+        phone,
+        status="completed",
+        disposition="callback_requested",
+    )
+
+    # Sunday is not an allowed day for c_acme_renewals.
+    payload["callback_at"] = "2026-11-15T12:00:00+05:30"
+    payload["ended_at"] = "2026-11-14T18:00:00+05:30"
+
+    assert process_call_completed(session, payload, config) is True
+
+    lead = session.get(Lead, ("c_acme_renewals", "lead_001"))
+
+    scheduled = lead.next_eligible_at
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=config.timezone)
+
+    assert lead.status == "callback_wait"
+    assert scheduled.weekday() == 0
+    assert scheduled.hour == 10
+    assert scheduled.minute == 0
+    assert scheduled.day == 16
