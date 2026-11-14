@@ -12,3 +12,15 @@ final_state.csv
 
 # Database files and backups
 *.db*
+
+# Python cache
+__pycache__/
+*.pyo
+.mypy_cache/
+.ruff_cache/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

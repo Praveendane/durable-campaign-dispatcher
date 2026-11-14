@@ -4,7 +4,7 @@
 
 - **Name:** Praveen Dane
 - **Assignment chosen:** B (Workflow)
-- **Time spent (honest estimate):** [Enter your actual total hours]
+- **Time spent (honest estimate):** 10
 
 ## How to run
 
